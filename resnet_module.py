@@ -27,7 +27,8 @@ def conv_layer(inpt, filter_shape, stride):
         conv, mean, var, beta, gamma, 0.001,
         scale_after_normalization=True)
 
-    out = tf.nn.relu(batch_norm)
+    #out = tf.nn.relu(batch_norm)
+    out = tf.nn.relu(conv)
 
     return out
 
