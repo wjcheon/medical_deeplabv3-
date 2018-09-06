@@ -85,7 +85,7 @@ train_Y = RT_Structure_BG_Brain_Lung_expand_dim
 print('CT images and RT-Structure were successfully loaded!')
 print("The shape of trainX {}".format(np.shape(train_X)))
 print("The shape of trainY {}".format(np.shape(train_Y)))
-
+print("tarinY consist of {}".format(np.unique(train_Y)))
 ## Image debug using my-eyes
 # size_RT_Structure = np.shape(RT_Structure_Lung )
 # Check_target = CT_img_standardization_expand_dim_float32
