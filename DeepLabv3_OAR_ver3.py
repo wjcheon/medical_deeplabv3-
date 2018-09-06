@@ -105,7 +105,7 @@ print("The trainY consist of {}".format(np.unique(train_Y)))
 
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
-from resnet_module import softmax_layer, conv_layer, residual_block, trans_conv_layer
+from resnet_module import conv_layer, residual_block, trans_conv_layer, atrous_spatial_pyramid_pooling
 
 is_train = True
 learning_rate = 0.001
@@ -126,7 +126,7 @@ conv1_channel_num = 16
 conv2_channel_num = 16
 conv3_channel_num = 64
 conv4_channel_num = 128
-conv5_channel_num = 256
+
 
 with tf.variable_scope('conv1_var_scope'):
     conv1 = conv_layer(X_tensor, [7, 7, 1, conv1_channel_num], 2, af_='relu',name='conv1')
@@ -152,132 +152,37 @@ for i in range(num_conv):
         conv4 = residual_block(conv4_x, conv4_channel_num, False, name='conv4')
 
 
-
-def atrous_spatial_pyramid_pooling(net, depth=256, reuse=None):
-    """
-    ASPP consists of (a) one 1×1 convolution and three 3×3 convolutions with rates = (6, 12, 18) when output stride = 16
-    (all with 256 filters and batch normalization), and (b) the image-level features as described in https://arxiv.org/abs/1706.05587
-    :param net: tensor of shape [BATCH_SIZE, WIDTH, HEIGHT, DEPTH]
-    :param scope: scope name of the aspp layer
-    :return: network layer with aspp applyed to it.
-    """
-    feature_map_size = tf.shape(net)
-    # apply global average pooling
-    image_level_features = tf.reduce_mean(net, [1, 2], name='image_level_global_pool', keepdims=True)
-    image_level_features = slim.conv2d(image_level_features, depth, [1, 1], scope="image_level_conv_1x1_in_ASPP",
-                                       activation_fn=None)
-    image_level_features = tf.image.resize_bilinear(image_level_features, (feature_map_size[1], feature_map_size[2]))
-
-    at_pool1x1 = slim.conv2d(net, depth, [1, 1], scope="conv_1x1_0_in_ASPP", activation_fn=None)
-
-    at_pool3x3_1 = slim.conv2d(net, depth, [3, 3], scope="conv_3x3_1_in_ASPP", rate=6, activation_fn=None)
-
-    at_pool3x3_2 = slim.conv2d(net, depth, [3, 3], scope="conv_3x3_2_in_ASPP", rate=12, activation_fn=None)
-
-    at_pool3x3_3 = slim.conv2d(net, depth, [3, 3], scope="conv_3x3_3_in_ASPP", rate=18, activation_fn=None)
-
-    net = tf.concat((image_level_features, at_pool1x1, at_pool3x3_1, at_pool3x3_2, at_pool3x3_3), axis=3,
-                    name="concat_in_ASPP")
-    net = slim.conv2d(net, depth, [1, 1], scope="conv_1x1_output", activation_fn=None)
-    return net
-
-
-
 with tf.variable_scope('ASPP'):
     conv4_ASSP =  atrous_spatial_pyramid_pooling(conv4)
 
 
-# with tf.variable_scope('Decoder_step_1'):
-#     # Decoder_bilinear_up_output_stride_4
-#     conv5_bilinear_upsampling = tf.image.resize_bilinear(conv5, [64, 64])
-#     # Dimension reduction of Conv2 -> 48 or 32
-#     conv2_dim_reduction = slim.conv2d(conv2, 48, [1, 1],padding='SAME', activation_fn=None)
-#     # Concat
-#     conv_6_concat = tf.concat((conv5_bilinear_upsampling, conv2_dim_reduction), axis=3)
-#     # Conv (3x3, 256) x 2
-#     conv_6_concat_conv1 = slim.conv2d(conv_6_concat , 256, [3, 3])
-#     conv_6= slim.conv2d(conv_6_concat_conv1 , 256, [3, 3])
-#
-#
-# with tf.variable_scope('Decoder_step_2'):
-#     #conv7_dim_reduction = slim.conv2d(conv_6, 2, [1, 1], padding='SAME')
-#     conv7_dim_reduction = slim.conv2d(conv_6, 3, [1, 1], padding='SAME')
-#
-#     conv7 = tf.image.resize_bilinear(conv7_dim_reduction, [256, 256])
-#
-# logits = conv7
-
-
-# %%
-# with tf.variable_scope("deconv5") as scope:
-wd5 = tf.get_variable('wd5', shape=[2, 2, 128, 256], initializer=tf.contrib.layers.xavier_initializer())
-bd5 = tf.get_variable('bd5', shape=[128], initializer=tf.contrib.layers.xavier_initializer())
-tmp5 = tf.nn.conv2d_transpose(conv4_ASSP, wd5, [tf.shape(X_tensor)[0], 32, 32, 128], strides=[1, 2, 2, 1], padding='SAME')
-deconv5 = tf.nn.relu(tmp5 + bd5)  # (?, 64, 64, 128)
+# with tf.variable_scope("deconv6") as scope:
+deconv5 = trans_conv_layer(conv4_ASSP, [32, 32, 128], name='deconv5')
 deconv5_concat = tf.concat([conv3, deconv5], 3)  # (?, 64, 64, 256)
-
-w5 = tf.get_variable('w5', shape=[3, 3, 192, 128], initializer=tf.contrib.layers.xavier_initializer())
-w5_ = tf.get_variable('w5_', shape=[3, 3, 128, 128], initializer=tf.contrib.layers.xavier_initializer())
-b5 = tf.get_variable('b5', shape=[128], initializer=tf.constant_initializer(0.0))
-b5_ = tf.get_variable('b5_', shape=[128], initializer=tf.constant_initializer(0.0))
-conv5 = tf.nn.conv2d(deconv5_concat, w5, strides=[1, 1, 1, 1], padding='SAME')  # (?,64,64,128)
-rconv5 = tf.nn.relu(conv5 + b5)
-conv5_ = tf.nn.conv2d(rconv5, w5_, strides=[1, 1, 1, 1], padding='SAME')  # (?,64,64,128)
-rconv5_ = tf.nn.relu(conv5_ + b5_)
+deconv5_conv1 = conv_layer(deconv5_concat, [3, 3, 192, 128], 1, name='decon5_concat_conv1')
+deconv5_conv2 = conv_layer(deconv5_conv1 , [3, 3, 128, 128], 1, name='decon5_concat_conv2')
 
 # with tf.variable_scope("deconv6") as scope:
-wd6 = tf.get_variable('wd6', shape=[2, 2, 64, 128], initializer=tf.contrib.layers.xavier_initializer())
-bd6 = tf.get_variable('bd6', shape=[64], initializer=tf.contrib.layers.xavier_initializer())
-tmp6 = tf.nn.conv2d_transpose(rconv5_, wd6, [tf.shape(X_tensor)[0], 64, 64, 64], strides=[1, 2, 2, 1], padding='SAME')
-deconv6 = tf.nn.relu(tmp6 + bd6)  # (?,128,128,64)
-deconv6_concat = tf.concat([conv2, deconv6], 3)  # (?,128,128,128)
-w6 = tf.get_variable('w6', shape=[3, 3, 80, 64], initializer=tf.contrib.layers.xavier_initializer())
-w6_ = tf.get_variable('w6_', shape=[3, 3, 64, 64], initializer=tf.contrib.layers.xavier_initializer())
-b6 = tf.get_variable('b6', shape=[64], initializer=tf.constant_initializer(0.0))
-b6_ = tf.get_variable('b6_', shape=[64], initializer=tf.constant_initializer(0.0))
-conv6 = tf.nn.conv2d(deconv6_concat, w6, strides=[1, 1, 1, 1], padding='SAME')  # (?,128,128,64)
-rconv6 = tf.nn.relu(conv6 + b6)
-conv6_ = tf.nn.conv2d(rconv6, w6_, strides=[1, 1, 1, 1], padding='SAME')  # (?,128,128,64)
-rconv6_ = tf.nn.relu(conv6_ + b6_)
+deconv6 = trans_conv_layer(deconv5_conv2, [64, 64, 64], name='deconv6')
+deconv6_concat = tf.concat([conv2, deconv6], 3)  # (?, 64, 64, 256)
+deconv6_conv1 = conv_layer(deconv6_concat, [3, 3, 80, 64], 1, name='decon6_concat_conv1')
+deconv6_conv2 = conv_layer(deconv6_conv1 , [3, 3, 64, 64], 1, name='decon6_concat_conv2')
 
-# with tf.variable_scope("deconv6") as scope:
-wd7 = tf.get_variable('wd7', shape=[2, 2, 32, 64], initializer=tf.contrib.layers.xavier_initializer())
-bd7 = tf.get_variable('bd7', shape=[32], initializer=tf.contrib.layers.xavier_initializer())
-tmp7 = tf.nn.conv2d_transpose(rconv6_, wd7, [tf.shape(X_tensor)[0], 128, 128, 32], strides=[1, 2, 2, 1], padding='SAME')
-deconv7 = tf.nn.relu(tmp7 + bd7)  # (?,256,256,32)
-deconv7_concat = tf.concat([conv1, deconv7], 3)  # (?,256,256,64)
-w7 = tf.get_variable('w7', shape=[3, 3, 48, 32], initializer=tf.contrib.layers.xavier_initializer())
-w7_ = tf.get_variable('w7_', shape=[3, 3, 32, 32], initializer=tf.contrib.layers.xavier_initializer())
-b7 = tf.get_variable('b7', shape=[32], initializer=tf.constant_initializer(0.0))
-b7_ = tf.get_variable('b7_', shape=[32], initializer=tf.constant_initializer(0.0))
-conv7 = tf.nn.conv2d(deconv7_concat, w7, strides=[1, 1, 1, 1], padding='SAME')  # (?,256,256,32)
-rconv7 = tf.nn.relu(conv7 + b7)
-conv7_ = tf.nn.conv2d(rconv7, w7_, strides=[1, 1, 1, 1], padding='SAME')  # (?,256,256,32)
-rconv7_ = tf.nn.relu(conv7_ + b7_)
+# with tf.variable_scope("deconv7") as scope:
+deconv7 = trans_conv_layer(deconv6_conv2, [128, 128, 32], name='deconv7')
+deconv7_concat = tf.concat([conv1, deconv7], 3)  # (?, 64, 64, 256)
+deconv7_conv1 = conv_layer(deconv7_concat, [3, 3, 48, 32], 1, name='deconv7_concat_conv1')
+deconv7_conv2 = conv_layer(deconv7_conv1 , [3, 3, 32, 32], 1, name='deconv7_concat_conv2')
 
-#
-wd8 = tf.get_variable('wd8', shape=[2, 2, 16, 32], initializer=tf.contrib.layers.xavier_initializer())
-bd8 = tf.get_variable('bd8', shape=[16], initializer=tf.contrib.layers.xavier_initializer())
-tmp8 = tf.nn.conv2d_transpose(rconv7_, wd8, [tf.shape(X_tensor)[0], 256, 256, 16], strides=[1, 2, 2, 1], padding='SAME')
-deconv8 = tf.nn.relu(tmp8 + bd8)  # (?,512,512,16)
-#deconv8_concat = tf.concat([rconv0_, deconv8], 3)  # (?,512,512,32)
-w8 = tf.get_variable('w8', shape=[3, 3, 16, 16], initializer=tf.contrib.layers.xavier_initializer())
-w8_ = tf.get_variable('w8_', shape=[3, 3, 16, 16], initializer=tf.contrib.layers.xavier_initializer())
-b8 = tf.get_variable('b8', shape=[16], initializer=tf.constant_initializer(0.0))
-b8_ = tf.get_variable('b8_', shape=[16], initializer=tf.constant_initializer(0.0))
-conv8 = tf.nn.conv2d(deconv8, w8, strides=[1, 1, 1, 1], padding='SAME')
-rconv8 = tf.nn.relu(conv8 + b8)  # (?,512,512,16)
-conv8_ = tf.nn.conv2d(rconv8, w8_, strides=[1, 1, 1, 1], padding='SAME')
-rconv8_ = tf.nn.relu(conv8_ + b8_)  # (?,512,512,16)
 
-#
-#w = tf.get_variable('w', shape=[1, 1, 16, 1], initializer=tf.contrib.layers.xavier_initializer())
-#b = tf.get_variable('b', shape=[1], initializer=tf.constant_initializer(0.0))
-w = tf.get_variable('w', shape=[1, 1, 16, 3], initializer=tf.contrib.layers.xavier_initializer())
-b = tf.get_variable('b', shape=[3], initializer=tf.constant_initializer(0.0))
-conv8 = tf.nn.conv2d(rconv8_, w, strides=[1, 1, 1, 1], padding='SAME') + b
+# with tf.variable_scope("deconv8") as scope:
+deconv8 = trans_conv_layer(deconv7_conv2, [256, 256, 16], name='deconv8')
+deconv8_conv1 = conv_layer(deconv8 , [3, 3, 16, 3], 1, af_='None', name='deconv8_concat_conv1')
+# deconv8_conv2 = conv_layer(deconv8_conv1 , [3, 3, 8, 4], 1, name='decon8_concat_conv2')
+# deconv8_conv3 = conv_layer(deconv8_conv2, [1, 1, 4, 3], 1, af_ = 'None', name='logits')
 
-logits = conv8
+logits = deconv8_conv1
+
 ##
 Y_tensor_int32 = tf.cast(Y_tensor, dtype=tf.int32)
 Y_squeeze = tf.squeeze(Y_tensor_int32 ,axis=3)
@@ -313,7 +218,7 @@ config.gpu_options.allow_growth = True
 sess= tf.Session(config=config)
 ##
 sess.run(tf.global_variables_initializer())
-training_epochs = 1000
+training_epochs = 500
 avg_cost = 0
 Epoch_total = 0
 c_list = []
@@ -381,3 +286,7 @@ target_slice_number= 79
 target_slice = np.squeeze(batch_ys[target_slice_number, :, :])
 plt.figure()
 plt.imshow(target_slice )
+
+##
+plt.figure()
+plt.plot(c_list)

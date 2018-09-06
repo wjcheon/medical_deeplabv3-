@@ -1,5 +1,6 @@
 import numpy as np
 import tensorflow as tf
+import tensorflow.contrib.slim as slim
 import string
 
 def weight_variable(shape_, name=None):
@@ -52,6 +53,34 @@ def conv_layer(inpt_, filter_shape_, stride_, af_='relu', name=None):
 
     return out
 
+
+def trans_conv_layer(inpt_, output_shape_, kernel_size_= [2, 2], strides_= [2, 2], af_='relu', name=None):
+    # conv1 (64 x 64, 128) -> (128 x 128, 64)
+    # filter_shape_ =
+    # original: [kernel, kernel, deconv_output_channel, deconv_input_channel]
+    inpt_channel_batch = tf.shape(inpt_)[0]
+    inpt_channel =  inpt_.get_shape().as_list()[3]
+    kernel_shape = [kernel_size_[0], kernel_size_[1], output_shape_[2], inpt_channel]
+
+    name_filter = name + '_filter'
+    name_bias = name + '_bias'
+    deconv_filter = tf.get_variable(name_filter, shape=kernel_shape, initializer=tf.contrib.layers.xavier_initializer())
+    deconv_bias = tf.get_variable(name_bias, shape=kernel_shape[2], initializer=tf.contrib.layers.xavier_initializer())
+    deconv_temp = tf.nn.conv2d_transpose(inpt_, deconv_filter, [inpt_channel_batch, output_shape_[0], output_shape_[1], output_shape_[2]], strides=[1, strides_[0], strides_[1], 1], padding='SAME')
+
+    if af_ is 'relu':
+        out = tf.nn.relu(deconv_temp + deconv_bias)
+        print('activation function is ReLu')
+    elif af_ is 'sigmoid':
+        out = tf.nn.sigmoid(deconv_temp + deconv_bias)
+        print('activation function is sigmoid')
+    elif af_ is 'None':
+        out=(deconv_temp + deconv_bias)
+        print('activation function is None')
+
+    return out
+
+
 def residual_block(inpt_, output_depth_, down_sample_, projection=False, name=None):
     input_depth_ = inpt_.get_shape().as_list()[3]
     #
@@ -79,3 +108,32 @@ def residual_block(inpt_, output_depth_, down_sample_, projection=False, name=No
 
     res = tf.nn.relu(conv2 + input_layer)
     return res
+
+
+def atrous_spatial_pyramid_pooling(net, depth=256, reuse=None):
+    """
+    ASPP consists of (a) one 1×1 convolution and three 3×3 convolutions with rates = (6, 12, 18) when output stride = 16
+    (all with 256 filters and batch normalization), and (b) the image-level features as described in https://arxiv.org/abs/1706.05587
+    :param net: tensor of shape [BATCH_SIZE, WIDTH, HEIGHT, DEPTH]
+    :param scope: scope name of the aspp layer
+    :return: network layer with aspp applyed to it.
+    """
+    feature_map_size = tf.shape(net)
+    # apply global average pooling
+    image_level_features = tf.reduce_mean(net, [1, 2], name='image_level_global_pool', keepdims=True)
+    image_level_features = slim.conv2d(image_level_features, depth, [1, 1], scope="image_level_conv_1x1_in_ASPP",
+                                       activation_fn=None)
+    image_level_features = tf.image.resize_bilinear(image_level_features, (feature_map_size[1], feature_map_size[2]))
+
+    at_pool1x1 = slim.conv2d(net, depth, [1, 1], scope="conv_1x1_0_in_ASPP", activation_fn=None)
+
+    at_pool3x3_1 = slim.conv2d(net, depth, [3, 3], scope="conv_3x3_1_in_ASPP", rate=6, activation_fn=None)
+
+    at_pool3x3_2 = slim.conv2d(net, depth, [3, 3], scope="conv_3x3_2_in_ASPP", rate=12, activation_fn=None)
+
+    at_pool3x3_3 = slim.conv2d(net, depth, [3, 3], scope="conv_3x3_3_in_ASPP", rate=18, activation_fn=None)
+
+    net = tf.concat((image_level_features, at_pool1x1, at_pool3x3_1, at_pool3x3_2, at_pool3x3_3), axis=3,
+                    name="concat_in_ASPP")
+    net = slim.conv2d(net, depth, [1, 1], scope="conv_1x1_output", activation_fn=None)
+    return net
